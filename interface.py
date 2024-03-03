@@ -3,6 +3,8 @@ from enum import Enum
 from scapy.all import *
 
 from model import *
+from mqtt_client import publish_message
+import json
 
 # ETH_P_ALL = 3
 DEVICE_TIMEOUT = 0.5
@@ -145,7 +147,7 @@ class PowerlineInterface:
             device.oui = caps.oui
             device.hpav_version = caps.avversion
 
-    def _hpav_network_stats(self, device: PowerlineDevice) -> List[HPAVNetworkStats]:
+    def _hpav_network_stats(self, device: PowerlineDevice, args) -> List[HPAVNetworkStats]:
         """ CM_NW_STATS for generic network statistics including up/down rates
             Could be sent to broadcast MAC, but in that case only connected devices would respond (e.g. that have
             existing network), so cannot be used for device discovery alone. """
@@ -171,7 +173,62 @@ class PowerlineInterface:
                 sta_data = packet.mmentry[1 + sta * stat_info_size:1 + (sta + 1) * stat_info_size]
                 netstat = HPAVNetworkStats.from_bytes(sta_data)
                 networks.append(netstat)
-                print(f"    STA {sta}: {device.mac.pretty} <-> {netstat.macaddr.pretty} Average PHY Rate: {netstat.txrate} up / {netstat.rxrate} down Mbps")
+                #print(networks)
+
+                mqtt_topic = f"{args.mqtt_topic}/{device.mac.pretty}/{netstat.macaddr.pretty}"
+                state_topic = mqtt_topic + "/state"
+                config_topic_up = f"homeassistant/sensor/{device.mac.pretty.replace(':', '')}_{netstat.macaddr.pretty.replace(':', '')}_up/config"
+                config_topic_down = f"homeassistant/sensor/{device.mac.pretty.replace(':', '')}_{netstat.macaddr.pretty.replace(':', '')}_down/config"
+
+                message = {
+                    "station": netstat.macaddr.pretty,
+                    "up": netstat.txrate,
+                    "down": netstat.rxrate
+                }
+
+                if args.mqtt_server:
+                    # Publish state message
+                    publish_message(server=args.mqtt_server, username=args.mqtt_user, password=args.mqtt_password, topic=state_topic, message=json.dumps(message))
+
+                    # Publish config messages for discovery
+                    config_payload_up = {
+                        "name": f"{device.mac.pretty} {netstat.macaddr.pretty} Upstream",
+                        "state_topic": state_topic,
+                        "value_template": "{{ value_json.up }}",
+                        "unit_of_measurement": "Mbps",
+                        "device_class": "signal_strength",
+                        "unique_id": f"{device.mac.pretty.replace(':', '')}_{netstat.macaddr.pretty.replace(':', '')}_up",
+                        "device": {
+                            "identifiers": [f"{device.mac.pretty.replace(':', '')}_{netstat.macaddr.pretty.replace(':', '')}"],
+                            "name": f"HomePlug {device.mac.pretty} to {netstat.macaddr.pretty}",
+                            "model": "HomePlug AV",
+                            "manufacturer": "HomePlugDevice"
+                        }
+                    }
+
+                    config_payload_down = {
+                        "name": f"{device.mac.pretty} {netstat.macaddr.pretty} Downstream",
+                        "state_topic": state_topic,
+                        "value_template": "{{ value_json.down }}",
+                        "unit_of_measurement": "Mbps",
+                        "device_class": "signal_strength",
+                        "unique_id": f"{device.mac.pretty.replace(':', '')}_{netstat.macaddr.pretty.replace(':', '')}_down",
+                        "device": config_payload_up['device']  # Reuse the device info
+                    }
+
+                    publish_message(server=args.mqtt_server, username=args.mqtt_user, password=args.mqtt_password, topic=config_topic_up, message=json.dumps(config_payload_up))
+                    publish_message(server=args.mqtt_server, username=args.mqtt_user, password=args.mqtt_password, topic=config_topic_down, message=json.dumps(config_payload_down))
+                else:
+                    print(f"    STA {sta}: {device.mac.pretty} <-> {netstat.macaddr.pretty} Average PHY Rate: {netstat.txrate} up / {netstat.rxrate} down Mbps")
+
+
+                # mqtt_topic = args.mqtt_topic + f"/{device.mac.pretty}"
+                #
+                # if args.mqtt_server:
+                #     message = "{'station':'" + netstat.macaddr.pretty + "', 'up':" + str(netstat.txrate) + ", 'down':" + str(netstat.rxrate) + "}"
+                #     publish_message(server=args.mqtt_server, username=args.mqtt_user,password=args.mqtt_password, topic=mqtt_topic, message=message)
+                # else:
+                #     print(f"    STA {sta}: {device.mac.pretty} <-> {netstat.macaddr.pretty} Average PHY Rate: {netstat.txrate} up / {netstat.rxrate} down Mbps")
 
         return networks
 
@@ -318,7 +375,7 @@ class PowerlineInterface:
 
         return devices
 
-    def discover_networks(self):
+    def discover_networks(self, args):
         """ Discover networks and then collect CCO and network PHY rate data """
 
         network_list = []
@@ -354,4 +411,4 @@ class PowerlineInterface:
 
             # Since the network info routes gave us the network IDs, discover network stats that now we can
             # correlate with the networks (down/up PHY rates between specific MACs)
-            self._hpav_network_stats(dev)
+            self._hpav_network_stats(dev, args)

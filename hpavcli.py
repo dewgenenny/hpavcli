@@ -3,9 +3,12 @@
 import os
 import sys
 import argparse
+import time
+
+
 
 from scapy.all import *
-
+from mqtt_client import publish_message
 
 def get_default_interface() -> str:
     return conf.iface.name
@@ -22,6 +25,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('command',
                         choices=['scan', 'networks'],
                         default='scan')
+    parser.add_argument("--mqtt_server", help="MQTT server address")
+    parser.add_argument("--mqtt_port", type=int, default=1883, help="MQTT server port")
+    parser.add_argument("--mqtt_topic", help="MQTT topic to publish the messages")
+    parser.add_argument("--mqtt_user", help="MQTT user")
+    parser.add_argument("--mqtt_password", help="MQTT password")
+
     return parser.parse_args()
 
 
@@ -48,15 +57,30 @@ def main(in_args: argparse.Namespace):
             devices.extend(iface.discover_devices())
 
         for device in devices:
-            print(
-                f"[{device.interface.interface_name}] {device.mac.pretty} ({HPAVVersion(device.hpav_version).name} "
-                f"{OUI(device.oui).name}) STAs:{len(device.sta_list)} NETs:{len(device.net_list)} HFID:'{device.hfid}'")
-            for net in device.networks():
-                print(f"  {net}")
+
+            if args.mqtt_server and args.mqtt_topic:
+                # Assuming `data` is the information you want to publish
+                message = str("data")  # Ensure `data` is in a publishable format
+                message = f"[{device.interface.interface_name}] {device.mac.pretty} ({HPAVVersion(device.hpav_version).name} " + f"{OUI(device.oui).name}) STAs:{len(device.sta_list)} NETs:{len(device.net_list)} HFID:'{device.hfid}'"
+                publish_message(server=args.mqtt_server, username=args.mqtt_user,password=args.mqtt_password, topic=args.mqtt_topic, message=message)
+            else:
+            # Existing logic to print `data` to the console
+
+                print(
+                    f"[{device.interface.interface_name}] {device.mac.pretty} ({HPAVVersion(device.hpav_version).name} "
+                    f"{OUI(device.oui).name}) STAs:{len(device.sta_list)} NETs:{len(device.net_list)} HFID:'{device.hfid}'")
+                for net in device.networks():
+                    print(f"  {net}")
 
     elif args.command == "networks":
         for iface in interfaces:
-            iface.discover_networks()
+            iface.discover_networks(args)
+
+
+def run_every_30_seconds(args):
+    while True:
+        main(args)
+        time.sleep(30)
 
 
 if __name__ == "__main__":
@@ -69,4 +93,4 @@ if __name__ == "__main__":
     from interface import *
 
     args = parse_args()
-    main(args)
+    run_every_30_seconds(args)
