@@ -5,4 +5,5 @@ ADD hpavcli.py /
 ADD interface.py /
 ADD model.py /
 ADD mqtt_client.py /
-CMD [ "python", "./hpavcli.py" ]
+ADD venvtools.py /
+CMD exec python ./hpavcli.py --mqtt_server $MQTT_SERVER --mqtt_topic $MQTT_TOPIC --mqtt_user $MQTT_USER --mqtt_password $MQTT_PASSWORD --mqtt_topic $MQTT_TOPIC networks
